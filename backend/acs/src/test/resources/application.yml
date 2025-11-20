@@ -1,0 +1,16 @@
+spring:
+  datasource:
+    url: jdbc:sqlite:file:memdb?mode=memory&cache=shared
+    driver-class-name: org.sqlite.JDBC
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.community.dialect.SQLiteDialect
+  main:
+    allow-bean-definition-overriding: true
+
+storage:
+  root-path: target/test-storage
+
