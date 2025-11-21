@@ -1,8 +1,10 @@
 package com.example.acs.quota;
 
 import com.example.acs.file.FileEntryRepository;
+import com.example.acs.quota.dto.QuotaDto;
 import com.example.acs.user.UserEntity;
 import com.example.acs.user.UserRepository;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -50,6 +52,14 @@ public class QuotaService {
     user.setUsedSpaceBytes(actual);
     userRepository.save(user);
     log.info("Recalculated used space for user '{}': {} bytes", user.getUsername(), actual);
+  }
+
+  public QuotaDto getQuota(UUID userId) {
+    UserEntity user =
+        userRepository
+            .findById(userId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+    return QuotaDto.fromUser(user);
   }
 }
 

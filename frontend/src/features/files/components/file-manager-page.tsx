@@ -1,11 +1,12 @@
 "use client";
 
-import { Fragment, useCallback, useMemo, useState } from "react";
-import type { ComponentType } from "react";
+import { Fragment, useCallback, useMemo, useState, type ComponentType } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowDownAZ,
+  ArrowUpAZ,
   CalendarClock,
   ChevronRight,
   Download,
@@ -22,22 +23,20 @@ import {
   Video,
 } from "lucide-react";
 import { UploadZone } from "@/src/features/files/components/upload-zone";
-import {
-  deleteFile,
-  getFileDownloadUrl,
-  uploadFile,
-} from "@/src/features/files/api/files-api";
-import {
-  createFolder,
-  deleteFolder,
-} from "@/src/features/files/api/folders-api";
+import { deleteFile, fetchFileBinary, uploadFile } from "@/src/features/files/api/files-api";
+import { createFolder, deleteFolder } from "@/src/features/files/api/folders-api";
 import { FilePreviewModal } from "@/src/features/files/components/file-preview-modal";
 import { useFolderContent } from "@/src/features/files/hooks/use-folder-content";
 import type { FileDto, FolderDto } from "@/src/features/files/types";
 import { resolveFileKind, type FileKind } from "@/src/features/files/utils/file-type";
 import { getApiErrorMessage } from "@/src/shared/api/client";
-import { formatBytes } from "@/src/shared/lib/utils";
+import { downloadBlob, formatBytes } from "@/src/shared/lib/utils";
 import { Button } from "@/src/shared/ui/button";
+import {
+  ShareModal,
+  type ShareModalTarget,
+} from "@/src/features/share/components/share-modal";
+import { useErrorNotifications } from "@/src/shared/providers/error/error-provider";
 
 const dateFormatter = new Intl.DateTimeFormat("ru-RU", {
   day: "2-digit",
@@ -56,6 +55,22 @@ const fileTypeIconMap: Record<FileKind, ComponentType<{ className?: string }>> =
   audio: Music3,
   text: FileText,
   other: FileText,
+};
+
+type FileSortField = "name" | "size" | "updatedAt";
+type SortDirection = "asc" | "desc";
+
+const fileSortOptions: Array<{ value: FileSortField; label: string }> = [
+  { value: "name", label: "По имени" },
+  { value: "size", label: "По размеру" },
+  { value: "updatedAt", label: "По дате" },
+];
+
+const fileSortComparators: Record<FileSortField, (a: FileDto, b: FileDto) => number> = {
+  name: (a, b) => a.originalName.localeCompare(b.originalName, "ru"),
+  size: (a, b) => a.sizeBytes - b.sizeBytes,
+  updatedAt: (a, b) =>
+    new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime(),
 };
 
 type IconButtonProps = {
@@ -86,19 +101,27 @@ type FolderCardProps = {
   folder: FolderDto;
   onOpen: (folder: FolderDto) => void;
   onDelete: (folder: FolderDto) => void;
+  onShare: (folder: FolderDto) => void;
   isDeleting?: boolean;
 };
 
-function FolderCard({ folder, onOpen, onDelete, isDeleting }: FolderCardProps) {
+function FolderCard({ folder, onOpen, onDelete, onShare, isDeleting }: FolderCardProps) {
   const handleOpen = () => {
     onOpen(folder);
   };
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={handleOpen}
-      className="group flex flex-col rounded-3xl border border-border/70 bg-card/80 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-lg"
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          handleOpen();
+        }
+      }}
+      className="group flex flex-col rounded-3xl border border-border/70 bg-card/80 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
     >
       <div className="flex items-center gap-3">
         <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
@@ -110,6 +133,15 @@ function FolderCard({ folder, onOpen, onDelete, isDeleting }: FolderCardProps) {
         </div>
         <div className="flex items-center gap-2">
           <IconButton label="Открыть" icon={ChevronRight} onClick={handleOpen} />
+          <IconButton
+            label="Поделиться"
+            icon={Share2}
+            onClick={(event) => {
+              event.stopPropagation();
+              event.preventDefault();
+              onShare(folder);
+            }}
+          />
           <IconButton
             label="Удалить"
             icon={Trash2}
@@ -126,19 +158,27 @@ function FolderCard({ folder, onOpen, onDelete, isDeleting }: FolderCardProps) {
         <span>Элементов внутри</span>
         <span className="rounded-full bg-muted px-2 py-0.5 text-[11px]">Папка</span>
       </div>
-    </button>
+    </div>
   );
 }
 
 type FileCardProps = {
   file: FileDto;
-  onDownload: (file: FileDto) => void;
+  onDownload: (file: FileDto) => Promise<void> | void;
   onDelete: (file: FileDto) => void;
   onPreview: (file: FileDto) => void;
+  onShare: (file: FileDto) => void;
   isDeleting?: boolean;
 };
 
-function FileCard({ file, onDownload, onDelete, onPreview, isDeleting }: FileCardProps) {
+function FileCard({
+  file,
+  onDownload,
+  onDelete,
+  onPreview,
+  onShare,
+  isDeleting,
+}: FileCardProps) {
   const type = resolveFileKind(file.mimeType);
   const Icon = fileTypeIconMap[type];
 
@@ -171,13 +211,16 @@ function FileCard({ file, onDownload, onDelete, onPreview, isDeleting }: FileCar
             icon={Download}
             onClick={(event) => {
               event.stopPropagation();
-              onDownload(file);
+              void onDownload(file);
             }}
           />
           <IconButton
             label="Поделиться"
             icon={Share2}
-            onClick={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onShare(file);
+            }}
           />
           <IconButton
             label="Удалить"
@@ -219,12 +262,17 @@ const quickStatsLabels = [
 export function FileManagerPage({ folderId }: FileManagerPageProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const [actionError, setActionError] = useState<string | null>(null);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
   const [deletingFolderId, setDeletingFolderId] = useState<string | null>(null);
   const [previewFile, setPreviewFile] = useState<FileDto | null>(null);
+  const [shareTarget, setShareTarget] = useState<ShareModalTarget | null>(null);
+  const [sortField, setSortField] = useState<FileSortField>("updatedAt");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const currentFolderKey = folderId ?? "root";
+  const syncQuota = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["quota"] });
+  }, [queryClient]);
 
   const invalidateFolderQuery = useCallback(() => {
     return queryClient.invalidateQueries({
@@ -241,8 +289,31 @@ export function FileManagerPage({ folderId }: FileManagerPageProps) {
     isRefetching,
   } = useFolderContent(folderId);
 
-  const handleMutationError = useCallback((err: unknown) => {
-    setActionError(getApiErrorMessage(err));
+  const sortedFiles = useMemo(() => {
+    if (!data) {
+      return [];
+    }
+    const items = [...data.files];
+    items.sort((a, b) => {
+      const compare = fileSortComparators[sortField](a, b);
+      return sortDirection === "asc" ? compare : -compare;
+    });
+    return items;
+  }, [data, sortField, sortDirection]);
+
+  const visibleFiles = sortedFiles;
+
+  const { notifyError } = useErrorNotifications();
+
+  const handleMutationError = useCallback(
+    (err: unknown) => {
+      notifyError(getApiErrorMessage(err));
+    },
+    [notifyError],
+  );
+
+  const toggleSortDirection = useCallback(() => {
+    setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
   }, []);
 
   const createFolderMutation = useMutation({
@@ -270,6 +341,7 @@ export function FileManagerPage({ folderId }: FileManagerPageProps) {
     onSuccess: () => {
       setUploadStatus(null);
       void invalidateFolderQuery();
+      syncQuota();
     },
     onError: (err) => {
       setUploadStatus(null);
@@ -282,6 +354,7 @@ export function FileManagerPage({ folderId }: FileManagerPageProps) {
     onSuccess: () => {
       setDeletingFileId(null);
       void invalidateFolderQuery();
+      syncQuota();
     },
     onError: (err) => {
       setDeletingFileId(null);
@@ -294,6 +367,7 @@ export function FileManagerPage({ folderId }: FileManagerPageProps) {
     onSuccess: () => {
       setDeletingFolderId(null);
       void invalidateFolderQuery();
+      syncQuota();
     },
     onError: (err) => {
       setDeletingFolderId(null);
@@ -320,10 +394,17 @@ export function FileManagerPage({ folderId }: FileManagerPageProps) {
     createFolderMutation.mutate(trimmed);
   }, [createFolderMutation]);
 
-  const handleDownloadFile = useCallback((file: FileDto) => {
-    const url = getFileDownloadUrl(file.id);
-    window.open(url, "_blank", "noopener,noreferrer");
-  }, []);
+  const handleDownloadFile = useCallback(
+    async (file: FileDto) => {
+      try {
+        const { blob } = await fetchFileBinary(file.id, "download");
+        downloadBlob(blob, file.originalName);
+      } catch (err) {
+        handleMutationError(err);
+      }
+    },
+    [handleMutationError],
+  );
 
   const handleDeleteFile = useCallback(
     (file: FileDto) => {
@@ -359,6 +440,24 @@ export function FileManagerPage({ folderId }: FileManagerPageProps) {
   }, []);
 
   const closePreview = useCallback(() => setPreviewFile(null), []);
+
+  const openShareForFile = useCallback((file: FileDto) => {
+    setShareTarget({
+      type: "file",
+      id: file.id,
+      name: file.originalName,
+    });
+  }, []);
+
+  const openShareForFolder = useCallback((folder: FolderDto) => {
+    setShareTarget({
+      type: "folder",
+      id: folder.id,
+      name: folder.name,
+    });
+  }, []);
+
+  const closeShareModal = useCallback(() => setShareTarget(null), []);
 
   const breadcrumbs = useMemo(() => {
     const base = [{ label: "Мои файлы", href: "/files" }];
@@ -467,21 +566,6 @@ export function FileManagerPage({ folderId }: FileManagerPageProps) {
         </div>
       </header>
 
-      {actionError ? (
-        <div className="rounded-2xl border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          <div className="flex items-start justify-between gap-4">
-            <p>{actionError}</p>
-            <button
-              type="button"
-              className="text-xs uppercase tracking-wide"
-              onClick={() => setActionError(null)}
-            >
-              Закрыть
-            </button>
-          </div>
-        </div>
-      ) : null}
-
       <section>
         <UploadZone
           id="upload-zone"
@@ -528,6 +612,7 @@ export function FileManagerPage({ folderId }: FileManagerPageProps) {
                 folder={folderItem}
                 onOpen={handleOpenFolder}
                 onDelete={handleDeleteFolder}
+                onShare={openShareForFolder}
                 isDeleting={deletingFolderId === folderItem.id && deleteFolderMutation.isPending}
               />
             ))}
@@ -549,21 +634,47 @@ export function FileManagerPage({ folderId }: FileManagerPageProps) {
                 : "Здесь пока нет файлов"}
             </p>
           </div>
-          <Button variant="ghost" className="gap-2 rounded-2xl px-4 text-sm">
-            <Upload className="h-4 w-4 rotate-180" />
-            Сортировать
-          </Button>
+          <div className="flex items-center gap-2 rounded-2xl border border-border/70 bg-card/60 px-3 py-2 text-sm text-muted-foreground">
+            <label htmlFor="file-sort-field" className="sr-only">
+              Поле сортировки
+            </label>
+            <select
+              id="file-sort-field"
+              value={sortField}
+              onChange={(event) => setSortField(event.target.value as FileSortField)}
+              className="bg-transparent text-foreground focus:outline-none"
+            >
+              {fileSortOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-transparent text-foreground transition hover:border-border"
+              onClick={toggleSortDirection}
+              aria-label={sortDirection === "asc" ? "По возрастанию" : "По убыванию"}
+            >
+              {sortDirection === "asc" ? (
+                <ArrowUpAZ className="h-4 w-4" />
+              ) : (
+                <ArrowDownAZ className="h-4 w-4" />
+              )}
+            </button>
+          </div>
         </div>
 
-        {files.length > 0 ? (
+        {visibleFiles.length > 0 ? (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {files.map((file) => (
+            {visibleFiles.map((file) => (
               <FileCard
                 key={file.id}
                 file={file}
                 onDownload={handleDownloadFile}
                 onDelete={handleDeleteFile}
                 onPreview={handlePreviewFile}
+                onShare={openShareForFile}
                 isDeleting={deletingFileId === file.id && deleteFileMutation.isPending}
               />
             ))}
@@ -575,7 +686,13 @@ export function FileManagerPage({ folderId }: FileManagerPageProps) {
         )}
       </section>
 
-      <FilePreviewModal file={previewFile} open={Boolean(previewFile)} onClose={closePreview} />
+      <FilePreviewModal
+        file={previewFile}
+        open={Boolean(previewFile)}
+        onClose={closePreview}
+        onDownload={handleDownloadFile}
+      />
+      <ShareModal open={Boolean(shareTarget)} target={shareTarget} onClose={closeShareModal} />
     </div>
   );
 }

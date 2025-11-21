@@ -1,30 +1,36 @@
 "use client";
 
-import Image from "next/image";
-import { useEffect, useEffectEvent, useMemo, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useState } from "react";
+import axios from "axios";
 import { Download, Loader2, X } from "lucide-react";
 import type { FileDto } from "@/src/features/files/types";
-import { getFileDownloadUrl, getFilePreviewUrl } from "@/src/features/files/api/files-api";
+import { fetchFileBinary } from "@/src/features/files/api/files-api";
 import { resolveFileKind } from "@/src/features/files/utils/file-type";
 import { Button } from "@/src/shared/ui/button";
 import { formatBytes } from "@/src/shared/lib/utils";
+import { getApiErrorMessage } from "@/src/shared/api/client";
 
 type Props = {
   file: FileDto | null;
   open: boolean;
   onClose: () => void;
+  onDownload?: (file: FileDto) => Promise<void> | void;
 };
 
 const TEXT_PREVIEW_LIMIT = 200_000; // ~200 KB
+const MEDIA_MAX_WIDTH = 960;
+const MEDIA_MAX_HEIGHT = 540;
 
-export function FilePreviewModal({ file, open, onClose }: Props) {
+export function FilePreviewModal({ file, open, onClose, onDownload }: Props) {
   const [textPreview, setTextPreview] = useState<string | null>(null);
   const [isTextLoading, setIsTextLoading] = useState(false);
   const [textError, setTextError] = useState<string | null>(null);
+  const [mediaUrl, setMediaUrl] = useState<string | null>(null);
+  const [isMediaLoading, setIsMediaLoading] = useState(false);
+  const [mediaError, setMediaError] = useState<string | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const kind = useMemo(() => resolveFileKind(file?.mimeType), [file?.mimeType]);
-  const previewUrl = file ? getFilePreviewUrl(file.id) : null;
-  const downloadUrl = file ? getFileDownloadUrl(file.id) : null;
 
   const resetTextState = useEffectEvent(() => {
     setTextPreview(null);
@@ -32,31 +38,34 @@ export function FilePreviewModal({ file, open, onClose }: Props) {
     setTextError(null);
   });
 
-  const loadTextPreview = useEffectEvent(async (url: string, signal: AbortSignal) => {
+  const resetMediaState = useEffectEvent(() => {
+    setMediaUrl((prev) => {
+      if (prev) {
+        URL.revokeObjectURL(prev);
+      }
+      return null;
+    });
+    setIsMediaLoading(false);
+    setMediaError(null);
+  });
+
+  const loadTextPreview = useEffectEvent(async (targetFile: FileDto, signal: AbortSignal) => {
     setIsTextLoading(true);
     setTextError(null);
     setTextPreview(null);
 
     try {
-      const response = await fetch(url, { signal });
-      if (!response.ok) {
-        throw new Error("Не удалось загрузить текстовое превью");
-      }
-
-      const contentLength = response.headers.get("content-length");
-      if (contentLength && Number(contentLength) > TEXT_PREVIEW_LIMIT) {
-        throw new Error("Файл слишком большой для текстового предпросмотра");
-      }
-
-      const text = await response.text();
+      const { blob } = await fetchFileBinary(targetFile.id, "download", signal);
+      const slice = blob.slice(0, TEXT_PREVIEW_LIMIT);
+      const text = await slice.text();
       if (!signal.aborted) {
-        setTextPreview(text.slice(0, TEXT_PREVIEW_LIMIT));
+        setTextPreview(text);
       }
     } catch (error) {
       if (signal.aborted) {
         return;
       }
-      setTextError(error instanceof Error ? error.message : "Ошибка предпросмотра");
+      setTextError(getApiErrorMessage(error));
     } finally {
       if (!signal.aborted) {
         setIsTextLoading(false);
@@ -64,17 +73,98 @@ export function FilePreviewModal({ file, open, onClose }: Props) {
     }
   });
 
+  const loadMediaPreview = useEffectEvent(
+    async (
+      targetFile: FileDto,
+      options: { preferPreview?: boolean },
+      signal: AbortSignal,
+    ) => {
+      setIsMediaLoading(true);
+      setMediaError(null);
+      setMediaUrl((prev) => {
+        if (prev) {
+          URL.revokeObjectURL(prev);
+        }
+        return null;
+      });
+
+      const assignBlobUrl = (blob: Blob) => {
+        const url = URL.createObjectURL(blob);
+        setMediaUrl(url);
+      };
+
+      try {
+        if (options.preferPreview) {
+          try {
+            const { blob } = await fetchFileBinary(targetFile.id, "preview", signal);
+            if (!signal.aborted) {
+              assignBlobUrl(blob);
+              return;
+            }
+          } catch (error) {
+            const isNotFound =
+              axios.isAxiosError(error) && error.response?.status === 404;
+            if (!isNotFound) {
+              throw error;
+            }
+          }
+        }
+
+        const { blob } = await fetchFileBinary(targetFile.id, "download", signal);
+        if (!signal.aborted) {
+          assignBlobUrl(blob);
+        }
+      } catch (error) {
+        if (!signal.aborted) {
+          setMediaError(getApiErrorMessage(error));
+        }
+      } finally {
+        if (!signal.aborted) {
+          setIsMediaLoading(false);
+        }
+      }
+    },
+  );
+
+  const handleDownloadClick = useCallback(async () => {
+    if (!file || !onDownload) {
+      return;
+    }
+
+    setIsDownloading(true);
+    try {
+      await onDownload(file);
+    } finally {
+      setIsDownloading(false);
+    }
+  }, [file, onDownload]);
+
   useEffect(() => {
-    if (!open || !file || kind !== "text" || !previewUrl) {
+    if (!open || !file || kind !== "text") {
       resetTextState();
       return;
     }
 
     const controller = new AbortController();
-    loadTextPreview(previewUrl, controller.signal);
+    loadTextPreview(file, controller.signal);
 
     return () => controller.abort();
-  }, [file, file?.id, kind, open, previewUrl]);
+  }, [file, file?.id, kind, open]);
+
+  useEffect(() => {
+    if (!open || !file) {
+      resetMediaState();
+      return;
+    }
+
+    if (kind === "image" || kind === "video" || kind === "audio") {
+      const controller = new AbortController();
+      loadMediaPreview(file, { preferPreview: kind === "image" }, controller.signal);
+      return () => controller.abort();
+    }
+
+    resetMediaState();
+  }, [file, file?.id, kind, open]);
 
   useEffect(() => {
     if (!open) {
@@ -95,41 +185,84 @@ export function FilePreviewModal({ file, open, onClose }: Props) {
     return null;
   }
 
+  const renderMediaLoader = () => (
+    <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-border/60 bg-muted/40">
+      <Loader2 className="h-6 w-6 animate-spin text-primary" />
+    </div>
+  );
+
+  const renderFallbackMessage = (message = "Предпросмотр для этого файла недоступен. Скачайте файл, чтобы открыть его локально.") => (
+    <div className="rounded-2xl border border-dashed border-border/60 bg-muted/30 p-6 text-center text-sm text-muted-foreground">
+      {message}
+    </div>
+  );
+
+  const renderError = (message: string) => (
+    <div className="rounded-2xl border border-destructive/40 bg-destructive/5 px-4 py-6 text-center text-sm text-destructive">
+      {message}
+    </div>
+  );
+
   const renderContent = () => {
     if (kind === "image") {
+      if (isMediaLoading) return renderMediaLoader();
+      if (mediaError) return renderError(mediaError);
+      if (!mediaUrl) return renderFallbackMessage("Не удалось загрузить изображение для предпросмотра.");
+
       return (
-        <div className="flex max-h-[65vh] w-full items-center justify-center overflow-hidden rounded-2xl bg-muted">
-          {previewUrl ? (
-            <Image
-              src={previewUrl}
-              alt={file.originalName}
-              width={1600}
-              height={900}
-              unoptimized
-              className="h-auto w-full object-contain"
-            />
-          ) : null}
+        <div
+          className="flex w-full items-center justify-center overflow-hidden rounded-2xl bg-muted p-4"
+          style={{
+            width: "100%",
+            maxWidth: `${MEDIA_MAX_WIDTH}px`,
+            maxHeight: `${MEDIA_MAX_HEIGHT}px`,
+          }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={mediaUrl}
+            alt={file.originalName}
+            className="h-auto max-h-full w-auto max-w-full object-contain"
+            style={{
+              maxWidth: `${MEDIA_MAX_WIDTH}px`,
+              maxHeight: `${MEDIA_MAX_HEIGHT}px`,
+            }}
+          />
         </div>
       );
     }
 
     if (kind === "video") {
+      if (isMediaLoading) return renderMediaLoader();
+      if (mediaError) return renderError(mediaError);
+      if (!mediaUrl) return renderFallbackMessage("Видео-превью недоступно. Скачайте файл для просмотра.");
+
       return (
-        <video
-          controls
-          className="w-full rounded-2xl bg-black"
-          src={previewUrl ?? ""}
-          preload="metadata"
-        />
+        <div className="flex w-full justify-center">
+          <video
+            controls
+            className="w-auto max-w-full rounded-2xl bg-black"
+            src={mediaUrl}
+            preload="metadata"
+            style={{
+              maxWidth: `${MEDIA_MAX_WIDTH}px`,
+              maxHeight: `${MEDIA_MAX_HEIGHT}px`,
+            }}
+          />
+        </div>
       );
     }
 
     if (kind === "audio") {
+      if (isMediaLoading) return renderMediaLoader();
+      if (mediaError) return renderError(mediaError);
+      if (!mediaUrl) return renderFallbackMessage("Аудио-превью недоступно. Скачайте файл для прослушивания.");
+
       return (
         <div className="flex flex-col items-center gap-4 rounded-2xl border border-border/60 bg-muted/40 p-6">
           <p className="text-sm text-muted-foreground">Аудио-превью</p>
           <audio controls className="w-full">
-            <source src={previewUrl ?? ""} />
+            <source src={mediaUrl} />
             Ваш браузер не поддерживает аудио-плеер.
           </audio>
         </div>
@@ -138,20 +271,16 @@ export function FilePreviewModal({ file, open, onClose }: Props) {
 
     if (kind === "text") {
       if (isTextLoading) {
-        return (
-          <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-border/60 bg-muted/40">
-            <Loader2 className="h-6 w-6 animate-spin text-primary" />
-          </div>
-        );
+        return renderMediaLoader();
       }
 
       if (textError) {
-        return (
-          <div className="rounded-2xl border border-destructive/40 bg-destructive/5 px-4 py-6 text-center text-sm text-destructive">
-            {textError}
-          </div>
-        );
+        return renderError(textError);
       }
+
+       if (!textPreview) {
+         return renderFallbackMessage("Не удалось отобразить текстовый файл. Скачайте его для просмотра.");
+       }
 
       return (
         <pre className="max-h-[65vh] overflow-auto rounded-2xl border border-border/60 bg-muted/30 p-4 text-sm text-muted-foreground">
@@ -160,12 +289,7 @@ export function FilePreviewModal({ file, open, onClose }: Props) {
       );
     }
 
-    return (
-      <div className="rounded-2xl border border-dashed border-border/60 bg-muted/30 p-6 text-center text-sm text-muted-foreground">
-        Предпросмотр для этого типа файла недоступен. Вы можете скачать файл, чтобы открыть его
-        локально.
-      </div>
-    );
+    return renderFallbackMessage();
   };
 
   return (
@@ -200,7 +324,9 @@ export function FilePreviewModal({ file, open, onClose }: Props) {
             <Button
               variant="outline"
               className="gap-2 rounded-2xl"
-              onClick={() => downloadUrl && window.open(downloadUrl, "_blank", "noopener,noreferrer")}
+              onClick={() => void handleDownloadClick()}
+              loading={isDownloading}
+              disabled={!onDownload}
             >
               <Download className="h-4 w-4" />
               Скачать

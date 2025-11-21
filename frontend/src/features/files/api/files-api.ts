@@ -35,11 +35,27 @@ export async function deleteFile(fileId: string) {
   await apiClient.delete(`/api/files/${fileId}`);
 }
 
-export function getFileDownloadUrl(fileId: string) {
-  return `${apiClient.defaults.baseURL}/api/files/${fileId}/download`;
-}
+export type FileBinaryPayload = {
+  blob: Blob;
+  contentType: string;
+};
 
-export function getFilePreviewUrl(fileId: string) {
-  return `${apiClient.defaults.baseURL}/api/files/${fileId}/preview`;
+export async function fetchFileBinary(
+  fileId: string,
+  variant: "download" | "preview" = "download",
+  signal?: AbortSignal,
+): Promise<FileBinaryPayload> {
+  const endpoint =
+    variant === "preview" ? `/api/files/${fileId}/preview` : `/api/files/${fileId}/download`;
+
+  const response = await apiClient.get<Blob>(endpoint, {
+    responseType: "blob",
+    signal,
+  });
+
+  return {
+    blob: response.data,
+    contentType: (response.headers["content-type"] as string | undefined) ?? "application/octet-stream",
+  };
 }
 

@@ -7,13 +7,12 @@ export const metadata: Metadata = {
 
 type PageProps = {
   params: {
-    path?: string[];
+    folderId: string;
   };
 };
 
-export default function NestedFilesPage({ params }: PageProps) {
-  const folderId = params.path?.[params.path.length - 1];
-
-  return <FileManagerPage folderId={folderId} />;
+export default function FolderFilesPage({ params }: PageProps) {
+  return <FileManagerPage folderId={params.folderId} />;
 }
+
 

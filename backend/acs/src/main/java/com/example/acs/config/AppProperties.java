@@ -9,7 +9,8 @@ public class AppProperties {
 
   private final UserDefaultsProperties userDefaults = new UserDefaultsProperties();
   private final AdminUserProperties admin = new AdminUserProperties();
-  private List<String> corsAllowedOrigins = new ArrayList<>(List.of("http://localhost:3000"));
+  private List<String> corsAllowedOrigins =
+      new ArrayList<>(List.of("http://localhost:3000", "http://localhost:3001"));
 
   public UserDefaultsProperties getUserDefaults() {
     return userDefaults;
