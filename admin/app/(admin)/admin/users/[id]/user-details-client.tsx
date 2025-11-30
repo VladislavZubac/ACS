@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { updateUserQuota } from "@/src/features/users/api/admin-users-api";
 import { useAdminUser } from "@/src/features/users/hooks/use-admin-users";
@@ -17,6 +17,7 @@ type UserDetailsClientProps = {
 };
 
 export function UserDetailsClient({ userId }: UserDetailsClientProps) {
+  const router = useRouter();
   const { user, isLoading } = useAdminUser(userId);
   const queryClient = useQueryClient();
   const [quotaInput, setQuotaInput] = useState<string | null>(null);
@@ -56,8 +57,12 @@ export function UserDetailsClient({ userId }: UserDetailsClientProps) {
     return (
       <div className="rounded-3xl border border-border/70 bg-card/80 p-6 text-center text-sm text-muted-foreground">
         <p>Пользователь не найден или данные ещё не доступны.</p>
-        <Button asChild variant="outline" className="mt-4 rounded-2xl">
-          <Link href="/admin/users">Вернуться к списку</Link>
+        <Button
+          variant="outline"
+          className="mt-4 rounded-2xl"
+          onClick={() => router.push("/admin/users")}
+        >
+          Вернуться к списку
         </Button>
       </div>
     );

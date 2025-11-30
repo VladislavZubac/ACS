@@ -1,6 +1,13 @@
 "use client";
 
-import { Fragment, useCallback, useMemo, useState, type ComponentType } from "react";
+import {
+  Fragment,
+  useCallback,
+  useMemo,
+  useState,
+  type ComponentType,
+  type MouseEvent,
+} from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -77,7 +84,7 @@ type IconButtonProps = {
   label: string;
   icon: ComponentType<{ className?: string }>;
   active?: boolean;
-  onClick?: () => void;
+  onClick?: (event: MouseEvent<HTMLButtonElement>) => void;
   disabled?: boolean;
 };
 
@@ -136,7 +143,7 @@ function FolderCard({ folder, onOpen, onDelete, onShare, isDeleting }: FolderCar
           <IconButton
             label="Поделиться"
             icon={Share2}
-            onClick={(event) => {
+            onClick={(event: MouseEvent<HTMLButtonElement>) => {
               event.stopPropagation();
               event.preventDefault();
               onShare(folder);
@@ -145,7 +152,7 @@ function FolderCard({ folder, onOpen, onDelete, onShare, isDeleting }: FolderCar
           <IconButton
             label="Удалить"
             icon={Trash2}
-            onClick={(event) => {
+            onClick={(event: MouseEvent<HTMLButtonElement>) => {
               event.stopPropagation();
               event.preventDefault();
               onDelete(folder);
@@ -209,15 +216,14 @@ function FileCard({
           <IconButton
             label="Скачать"
             icon={Download}
-            onClick={(event) => {
-              event.stopPropagation();
+            onClick={() => {
               void onDownload(file);
             }}
           />
           <IconButton
             label="Поделиться"
             icon={Share2}
-            onClick={(event) => {
+            onClick={(event: MouseEvent<HTMLButtonElement>) => {
               event.stopPropagation();
               onShare(file);
             }}
@@ -225,7 +231,7 @@ function FileCard({
           <IconButton
             label="Удалить"
             icon={Trash2}
-            onClick={(event) => {
+            onClick={(event: MouseEvent<HTMLButtonElement>) => {
               event.stopPropagation();
               onDelete(file);
             }}

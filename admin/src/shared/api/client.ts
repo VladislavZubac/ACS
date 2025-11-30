@@ -39,7 +39,9 @@ apiClient.interceptors.response.use(
 
 export function onUnauthorized(handler: UnauthorizedHandler) {
   unauthorizedHandlers.add(handler);
-  return () => unauthorizedHandlers.delete(handler);
+  return () => {
+    unauthorizedHandlers.delete(handler);
+  };
 }
 
 export type ApiErrorPayload = {
